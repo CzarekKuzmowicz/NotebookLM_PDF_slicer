@@ -2,90 +2,129 @@ import streamlit as st
 from pypdf import PdfReader, PdfWriter
 import math
 import io
+import os
+import gdown
+import requests
+import tempfile
 
-# --- KONFIGURACJA STRONY ---
-st.set_page_config(page_title="PDF Splitter dla NotebookLM", page_icon="✂️")
+# --- PAGE CONFIGURATION ---
+st.set_page_config(page_title="PDF Splitter for NotebookLM", page_icon="✂️")
 
-st.title("✂️ PDF Splitter dla NotebookLM")
-st.write("Wgraj duży plik PDF, a ja podzielę go na części idealne dla NotebookLM (poniżej 500k znaków).")
+st.title("✂️ PDF Splitter for NotebookLM")
+st.markdown("Optimize large PDF files to fit the NotebookLM limit (500k characters).")
 
-# --- LIMIT ZNAKÓW ---
-LIMIT = 475000
+# --- CHARACTER LIMIT ---
+LIMIT = 500000
 
-# --- WGRYWANIE PLIKU ---
-uploaded_file = st.file_uploader("Wybierz plik PDF", type="pdf")
-
-if uploaded_file is not None:
-    st.info("Plik wgrany! Trwa analiza...")
-    
+# --- PROCESSING FUNCTION ---
+def process_pdf(pdf_file, file_name_base):
     try:
-        # Wczytanie pliku z pamięci
-        reader = PdfReader(uploaded_file)
+        reader = PdfReader(pdf_file)
         total_pages = len(reader.pages)
         total_chars = 0
         
-        # Pasek postępu
         progress_bar = st.progress(0)
         status_text = st.empty()
         
-        # Liczenie znaków
+        # Counting characters
         for i, page in enumerate(reader.pages):
             text = page.extract_text()
             if text:
                 total_chars += len(text)
             
-            # Aktualizacja paska co 10 stron
+            # Update progress bar
             if (i + 1) % 10 == 0 or (i + 1) == total_pages:
                 prog = (i + 1) / total_pages
                 progress_bar.progress(prog)
-                status_text.text(f"Analiza strony {i + 1} z {total_pages}...")
+                status_text.text(f"Analyzing page {i + 1} of {total_pages}...")
 
         status_text.empty()
         progress_bar.empty()
         
-        st.write(f"📊 **Statystyki:**")
-        st.write(f"- Całkowita liczba znaków: `{total_chars}`")
-        st.write(f"- Liczba stron: `{total_pages}`")
+        st.info(f"📊 **Result:** {total_chars} characters | {total_pages} pages")
 
-        # Logika podziału
         if total_chars == 0:
-            st.error("Nie wykryto tekstu. To może być skan (zdjęcie). Ten program działa tylko na plikach tekstowych.")
-        elif total_chars <= LIMIT:
-            st.success("✅ Ten plik jest wystarczająco mały! Nie trzeba go dzielić.")
-        else:
-            num_chunks = math.ceil(total_chars / LIMIT)
-            pages_per_chunk = math.ceil(total_pages / num_chunks)
-            
-            st.warning(f"⚠️ Plik jest za duży. Dzielę go na **{num_chunks}** części (po ok. {pages_per_chunk} stron).")
-            
-            st.write("---")
-            st.subheader("📥 Pobierz swoje pliki:")
+            st.error("No text detected. This might be a scanned image (OCR required).")
+            return
+        
+        if total_chars <= LIMIT:
+            st.success("✅ File fits within the limit! No need to split.")
+            return
 
-            # Dzielenie i tworzenie przycisków
-            base_name = uploaded_file.name.replace(".pdf", "")
+        # Splitting logic
+        num_chunks = math.ceil(total_chars / LIMIT)
+        pages_per_chunk = math.ceil(total_pages / num_chunks)
+        
+        st.warning(f"⚠️ File is too large. Splitting into **{num_chunks}** parts (approx. {pages_per_chunk} pages each).")
+        st.subheader("📥 Download files:")
+
+        for i in range(num_chunks):
+            writer = PdfWriter()
+            start_page = i * pages_per_chunk
+            end_page = min(start_page + pages_per_chunk, total_pages)
             
-            for i in range(num_chunks):
-                writer = PdfWriter()
-                start_page = i * pages_per_chunk
-                end_page = min(start_page + pages_per_chunk, total_pages)
-                
-                for page_num in range(start_page, end_page):
-                    writer.add_page(reader.pages[page_num])
-                
-                # Zapis do pamięci RAM (wirtualny plik)
-                output_buffer = io.BytesIO()
-                writer.write(output_buffer)
-                output_buffer.seek(0) # Przewiń na początek pliku
-                
-                part_name = f"{base_name}_part_{i+1}.pdf"
-                
-                # Przycisk pobierania
-                st.download_button(
-                    label=f"⬇️ Pobierz Część {i+1} (Strony {start_page+1}-{end_page})",
-                    data=output_buffer,
-                    file_name=part_name,
-                    mime="application/pdf"
-                )
-                
+            for page_num in range(start_page, end_page):
+                writer.add_page(reader.pages[page_num])
+            
+            output_buffer = io.BytesIO()
+            writer.write(output_buffer)
+            output_buffer.seek(0)
+            
+            part_name = f"{file_name_base}_part_{i+1}.pdf"
+            
+            st.download_button(
+                label=f"⬇️ Part {i+1} (Pages {start_page+1}-{end_page})",
+                data=output_buffer,
+                file_name=part_name,
+                mime="application/pdf"
+            )
+
     except Exception as e:
-        st.error(f"Wystąpił błąd: {e}")
+        st.error(f"Error processing PDF: {e}")
+
+# --- TABS INTERFACE ---
+tab1, tab2 = st.tabs(["📂 Upload from Computer", "🔗 Link (URL / Google Drive)"])
+
+# Option 1: Local Upload
+with tab1:
+    uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
+    if uploaded_file is not None:
+        process_pdf(uploaded_file, uploaded_file.name.replace(".pdf", ""))
+
+# Option 2: Link
+with tab2:
+    url = st.text_input("Paste PDF URL or Google Drive link:")
+    st.caption("ℹ️ Note: Google Drive links must be public ('Anyone with the link').")
+    
+    if st.button("Download and Analyze"):
+        if not url:
+            st.error("Please paste a link!")
+        else:
+            with st.spinner("Downloading file from the web... (this may take a moment)"):
+                try:
+                    # Create a temporary file
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+                        # Logic for Google Drive vs Standard Link
+                        if "drive.google.com" in url:
+                            # Use gdown for Drive (handles large files better)
+                            gdown.download(url, tmp_file.name, quiet=False, fuzzy=True)
+                        else:
+                            # Standard link
+                            response = requests.get(url, stream=True)
+                            response.raise_for_status() # Check if link works
+                            for chunk in response.iter_content(chunk_size=8192):
+                                tmp_file.write(chunk)
+                        
+                        tmp_path = tmp_file.name
+                    
+                    # Process after download
+                    with open(tmp_path, "rb") as f:
+                        # Create BytesIO object for the processor
+                        file_stream = io.BytesIO(f.read())
+                        process_pdf(file_stream, "downloaded_file")
+                    
+                    # Cleanup
+                    os.remove(tmp_path)
+                    
+                except Exception as e:
+                    st.error(f"Failed to download file. Ensure the link is public. Error: {str(e)}")
