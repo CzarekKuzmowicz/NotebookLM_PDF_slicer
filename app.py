@@ -1,133 +1,115 @@
 import streamlit as st
 from pypdf import PdfReader, PdfWriter
-import math
-import io
-import os
-import gdown
-import requests
-import tempfile
-import zipfile  # Nowa biblioteka do obsługi ZIP (wbudowana)
+import math, io, os, tempfile, zipfile, requests, gdown
 
-# --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="PDF Splitter for NotebookLM", page_icon="✂️")
+# --- CONFIG ---
+st.set_page_config(page_title="PDF Splitter", page_icon="✂️")
+st.title("✂️ PDF Splitter (NotebookLM Optimized)")
+LIMIT = 500000
 
-st.title("✂️ PDF Splitter for NotebookLM")
-st.markdown("Optimize large PDF files to fit the NotebookLM limit (500k characters).")
-
-# --- CHARACTER LIMIT ---
-LIMIT = 480000
-
-# --- ZMODYFIKOWANA FUNKCJA PROCESS_PDF ---
-def process_pdf(pdf_file, file_name_base):
+# --- CORE LOGIC ---
+def process_pdf(pdf_file, base_name):
     try:
         reader = PdfReader(pdf_file)
         total_pages = len(reader.pages)
         total_chars = 0
         
-        # 1. FAZA ANALIZY (Liczenie znaków)
-        progress_bar = st.progress(0)
-        status_text = st.empty()
+        # 1. Analyze
+        pbar = st.progress(0)
+        status = st.empty()
         
         for i, page in enumerate(reader.pages):
             text = page.extract_text()
-            if text:
-                total_chars += len(text)
+            if text: total_chars += len(text)
             
-            if (i + 1) % 10 == 0 or (i + 1) == total_pages:
+            if (i + 1) % 50 == 0 or (i + 1) == total_pages:
                 prog = (i + 1) / total_pages
-                progress_bar.progress(prog)
-                status_text.text(f"Analyzing content... {int(prog*100)}%")
-
-        status_text.empty()
-        progress_bar.empty()
+                pbar.progress(prog)
+                status.caption(f"Analyzing... {int(prog*100)}%")
         
-        st.info(f"📊 **Result:** {total_chars} characters | {total_pages} pages")
+        pbar.empty()
+        status.empty()
+        
+        st.caption(f"Stats: {total_chars:,} chars | {total_pages} pages")
 
         if total_chars == 0:
-            st.error("No text detected. This might be a scanned image (OCR required).")
+            st.error("No text found (OCR required).")
             return
-        
         if total_chars <= LIMIT:
-            st.success("✅ File fits within the limit! No need to split.")
+            st.success("File fits within limits.")
             return
 
-        # Obliczenia podziału
+        # 2. Split Strategy
         num_chunks = math.ceil(total_chars / LIMIT)
         pages_per_chunk = math.ceil(total_pages / num_chunks)
         
-        st.warning(f"⚠️ File is too large. Splitting into **{num_chunks}** parts (approx. {pages_per_chunk} pages each).")
-        
-        st.markdown("---")
-        st.subheader("📥 Download files:")
-        
-        # 2. FAZA GENEROWANIA (Tu program "myślał" w ciszy, teraz dodajemy wskaźnik)
-        processing_message = st.empty()
-        processing_bar = st.progress(0)
-        
+        st.warning(f"Splitting into {num_chunks} parts (~{pages_per_chunk} pages each).")
+        st.divider()
+
+        # 3. Generate Files
         zip_buffer = io.BytesIO()
-        generated_parts = [] # Lista do przechowywania gotowych części
-
-        with zipfile.ZipFile(zip_buffer, "w") as zip_file:
+        parts_data = []
+        gen_bar = st.progress(0)
+        
+        with zipfile.ZipFile(zip_buffer, "w") as zf:
             for i in range(num_chunks):
-                # Aktualizacja statusu dla użytkownika
-                processing_message.info(f"⏳ Generating Part {i+1} of {num_chunks}... Please wait.")
-                
                 writer = PdfWriter()
-                start_page = i * pages_per_chunk
-                end_page = min(start_page + pages_per_chunk, total_pages)
+                start = i * pages_per_chunk
+                end = min(start + pages_per_chunk, total_pages)
                 
-                for page_num in range(start_page, end_page):
-                    writer.add_page(reader.pages[page_num])
+                for p in range(start, end):
+                    writer.add_page(reader.pages[p])
                 
-                # Zapis do pamięci
-                output_buffer = io.BytesIO()
-                writer.write(output_buffer)
-                pdf_bytes = output_buffer.getvalue()
+                buf = io.BytesIO()
+                writer.write(buf)
                 
-                part_name = f"{file_name_base} part {i+1}.pdf"
+                name = f"{base_name} part {i+1}.pdf"
+                zf.writestr(name, buf.getvalue())
+                parts_data.append((name, buf, start, end))
                 
-                # Dodaj do ZIP
-                zip_file.writestr(part_name, pdf_bytes)
-                
-                # Dodaj do listy przycisków
-                generated_parts.append((part_name, output_buffer, start_page, end_page))
-                
-                # Aktualizacja paska postępu
-                processing_bar.progress((i + 1) / num_chunks)
-
-        # Sprzątanie po paskach postępu
-        processing_message.empty()
-        processing_bar.empty()
-        st.success("✅ Processing complete! Buttons are ready below.")
-
-        # --- PRZYCISK ZIP ---
+                gen_bar.progress((i + 1) / num_chunks)
+        
+        gen_bar.empty()
+        
+        # 4. Download Buttons
         zip_buffer.seek(0)
-        st.download_button(
-            label="📦 Download All (ZIP)",
-            data=zip_buffer,
-            file_name=f"{file_name_base}_split.zip",
-            mime="application/zip",
-            type="primary"
-        )
+        st.download_button("📦 Download All (ZIP)", zip_buffer, f"{base_name}_split.zip", "application/zip", type="primary")
         
-        st.write("Or download individually:")
+        st.write("") # Spacer
         
-        # --- PRZYCISKI POJEDYNCZE ---
-        for part_name, buffer, start, end in generated_parts:
-            buffer.seek(0)
-            col1, col2 = st.columns([3, 1]) # Ładniejszy układ
-            with col1:
-                st.write(f"📄 **{part_name}**")
-                st.caption(f"Pages {start+1}-{end}")
-            with col2:
-                st.download_button(
-                    label="⬇️ Download",
-                    data=buffer,
-                    file_name=part_name,
-                    mime="application/pdf",
-                    key=part_name # Unikalny klucz wymagany przez Streamlit w pętli
-                )
-            st.divider()
+        for name, buf, s, e in parts_data:
+            buf.seek(0)
+            c1, c2 = st.columns([3, 1])
+            c1.markdown(f"**{name}** (p. {s+1}-{e})")
+            c2.download_button("⬇️ Download", buf, name, "application/pdf", key=name)
 
     except Exception as e:
-        st.error(f"Error processing PDF: {e}")
+        st.error(f"Error: {e}")
+
+# --- UI ---
+t1, t2 = st.tabs(["Local Upload", "URL / Drive Link"])
+
+with t1:
+    f = st.file_uploader("Upload PDF", type="pdf")
+    if f: process_pdf(f, f.name.replace(".pdf", ""))
+
+with t2:
+    url = st.text_input("Paste Link:")
+    if st.button("Process Link") and url:
+        with st.spinner("Downloading..."):
+            try:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                    if "drive.google.com" in url:
+                        gdown.download(url, tmp.name, quiet=True, fuzzy=True)
+                    else:
+                        r = requests.get(url, stream=True)
+                        r.raise_for_status()
+                        for chunk in r.iter_content(8192): tmp.write(chunk)
+                    
+                    path = tmp.name
+                
+                with open(path, "rb") as f:
+                    process_pdf(io.BytesIO(f.read()), "downloaded_doc")
+                os.remove(path)
+            except Exception as e:
+                st.error(f"Download failed: {e}")
