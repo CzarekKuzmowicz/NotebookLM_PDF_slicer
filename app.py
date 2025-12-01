@@ -6,7 +6,7 @@ import os
 import gdown
 import requests
 import tempfile
-import zipfil
+import zipfile
 
 # PAGE CONFIGURATION
 st.set_page_config(page_title="PDF Splitter for NotebookLM", page_icon="✂️")
