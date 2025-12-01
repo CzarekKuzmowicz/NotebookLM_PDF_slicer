@@ -6,18 +6,18 @@ import os
 import gdown
 import requests
 import tempfile
-import zipfile  # Nowa biblioteka do obsługi ZIP (wbudowana)
+import zipfil
 
-# --- PAGE CONFIGURATION ---
+# PAGE CONFIGURATION
 st.set_page_config(page_title="PDF Splitter for NotebookLM", page_icon="✂️")
 
 st.title("✂️ PDF Splitter for NotebookLM")
 st.markdown("Optimize large PDF files to fit the NotebookLM limit (500k characters).")
 
-# --- CHARACTER LIMIT ---
+# CHARACTER LIMIT
 LIMIT = 500000
 
-# --- PROCESSING FUNCTION ---
+# PROCESSING FUNCTION
 def process_pdf(pdf_file, file_name_base):
     try:
         reader = PdfReader(pdf_file)
@@ -55,10 +55,10 @@ def process_pdf(pdf_file, file_name_base):
         num_chunks = math.ceil(total_chars / LIMIT)
         pages_per_chunk = math.ceil(total_pages / num_chunks)
         
-        st.warning(f"⚠️ File is too large. Splitting into **{num_chunks}** parts (approx. {pages_per_chunk} pages each).")
+        st.warning(f"⚠️ File is too large for NotebookLM. Splitting into **{num_chunks}** parts (approx. {pages_per_chunk} pages each).")
         st.subheader("📥 Download files:")
 
-        # --- ZIP PREPARATION ---
+        # ZIP PREPARATION
         zip_buffer = io.BytesIO()
         
         # List to store data for individual buttons later
@@ -87,19 +87,19 @@ def process_pdf(pdf_file, file_name_base):
                 # Store for individual buttons
                 generated_parts.append((part_name, output_buffer, start_page, end_page))
         
-        # --- DOWNLOAD ALL BUTTON (ZIP) ---
+        # DOWNLOAD ALL BUTTON (ZIP)
         zip_buffer.seek(0)
         st.download_button(
             label="📦 Download All (ZIP)",
             data=zip_buffer,
             file_name=f"{file_name_base}_split.zip",
             mime="application/zip",
-            type="primary" # Makes the button stand out
+            type="primary" 
         )
         
-        st.markdown("---") # Separator
+        st.markdown("---") # separator
         
-        # --- INDIVIDUAL BUTTONS ---
+        # INDIVIDUAL BUTTONS
         for part_name, buffer, start, end in generated_parts:
             buffer.seek(0)
             st.download_button(
@@ -112,7 +112,7 @@ def process_pdf(pdf_file, file_name_base):
     except Exception as e:
         st.error(f"Error processing PDF: {e}")
 
-# --- TABS INTERFACE ---
+# TABS INTERFACE
 tab1, tab2 = st.tabs(["📂 Upload from Computer", "🔗 Link (URL / Google Drive)"])
 
 # Option 1: Local Upload
