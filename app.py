@@ -6,6 +6,7 @@ import os
 import gdown
 import requests
 import tempfile
+import zipfile  # Nowa biblioteka do obsługi ZIP (wbudowana)
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="PDF Splitter for NotebookLM", page_icon="✂️")
@@ -14,7 +15,7 @@ st.title("✂️ PDF Splitter for NotebookLM")
 st.markdown("Optimize large PDF files to fit the NotebookLM limit (500k characters).")
 
 # --- CHARACTER LIMIT ---
-LIMIT = 500000
+LIMIT = 480000
 
 # --- PROCESSING FUNCTION ---
 def process_pdf(pdf_file, file_name_base):
@@ -32,7 +33,6 @@ def process_pdf(pdf_file, file_name_base):
             if text:
                 total_chars += len(text)
             
-            # Update progress bar
             if (i + 1) % 10 == 0 or (i + 1) == total_pages:
                 prog = (i + 1) / total_pages
                 progress_bar.progress(prog)
@@ -58,23 +58,53 @@ def process_pdf(pdf_file, file_name_base):
         st.warning(f"⚠️ File is too large. Splitting into **{num_chunks}** parts (approx. {pages_per_chunk} pages each).")
         st.subheader("📥 Download files:")
 
-        for i in range(num_chunks):
-            writer = PdfWriter()
-            start_page = i * pages_per_chunk
-            end_page = min(start_page + pages_per_chunk, total_pages)
-            
-            for page_num in range(start_page, end_page):
-                writer.add_page(reader.pages[page_num])
-            
-            output_buffer = io.BytesIO()
-            writer.write(output_buffer)
-            output_buffer.seek(0)
-            
-            part_name = f"{file_name_base}_part_{i+1}.pdf"
-            
+        # --- ZIP PREPARATION ---
+        zip_buffer = io.BytesIO()
+        
+        # List to store data for individual buttons later
+        generated_parts = []
+
+        with zipfile.ZipFile(zip_buffer, "w") as zip_file:
+            for i in range(num_chunks):
+                writer = PdfWriter()
+                start_page = i * pages_per_chunk
+                end_page = min(start_page + pages_per_chunk, total_pages)
+                
+                for page_num in range(start_page, end_page):
+                    writer.add_page(reader.pages[page_num])
+                
+                # Save PDF to memory
+                output_buffer = io.BytesIO()
+                writer.write(output_buffer)
+                pdf_bytes = output_buffer.getvalue()
+                
+                # New naming convention: "Name part X.pdf"
+                part_name = f"{file_name_base} part {i+1}.pdf"
+                
+                # Add to ZIP
+                zip_file.writestr(part_name, pdf_bytes)
+                
+                # Store for individual buttons
+                generated_parts.append((part_name, output_buffer, start_page, end_page))
+        
+        # --- DOWNLOAD ALL BUTTON (ZIP) ---
+        zip_buffer.seek(0)
+        st.download_button(
+            label="📦 Download All (ZIP)",
+            data=zip_buffer,
+            file_name=f"{file_name_base}_split.zip",
+            mime="application/zip",
+            type="primary" # Makes the button stand out
+        )
+        
+        st.markdown("---") # Separator
+        
+        # --- INDIVIDUAL BUTTONS ---
+        for part_name, buffer, start, end in generated_parts:
+            buffer.seek(0)
             st.download_button(
-                label=f"⬇️ Part {i+1} (Pages {start_page+1}-{end_page})",
-                data=output_buffer,
+                label=f"⬇️ {part_name} (Pages {start+1}-{end})",
+                data=buffer,
                 file_name=part_name,
                 mime="application/pdf"
             )
@@ -89,7 +119,9 @@ tab1, tab2 = st.tabs(["📂 Upload from Computer", "🔗 Link (URL / Google Driv
 with tab1:
     uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
     if uploaded_file is not None:
-        process_pdf(uploaded_file, uploaded_file.name.replace(".pdf", ""))
+        # Clean filename just in case
+        clean_name = uploaded_file.name.replace(".pdf", "")
+        process_pdf(uploaded_file, clean_name)
 
 # Option 2: Link
 with tab2:
@@ -102,28 +134,25 @@ with tab2:
         else:
             with st.spinner("Downloading file from the web... (this may take a moment)"):
                 try:
-                    # Create a temporary file
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
-                        # Logic for Google Drive vs Standard Link
                         if "drive.google.com" in url:
-                            # Use gdown for Drive (handles large files better)
                             gdown.download(url, tmp_file.name, quiet=False, fuzzy=True)
                         else:
-                            # Standard link
                             response = requests.get(url, stream=True)
-                            response.raise_for_status() # Check if link works
+                            response.raise_for_status()
                             for chunk in response.iter_content(chunk_size=8192):
                                 tmp_file.write(chunk)
                         
                         tmp_path = tmp_file.name
                     
-                    # Process after download
-                    with open(tmp_path, "rb") as f:
-                        # Create BytesIO object for the processor
-                        file_stream = io.BytesIO(f.read())
-                        process_pdf(file_stream, "downloaded_file")
+                    # Extract filename from URL or use generic default
+                    # Simple heuristic for name
+                    default_name = "downloaded_document"
                     
-                    # Cleanup
+                    with open(tmp_path, "rb") as f:
+                        file_stream = io.BytesIO(f.read())
+                        process_pdf(file_stream, default_name)
+                    
                     os.remove(tmp_path)
                     
                 except Exception as e:
